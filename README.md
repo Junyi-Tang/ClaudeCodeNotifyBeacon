@@ -1,8 +1,8 @@
-# ClaudeIsland
+# ClaudeCodeNotifyBeacon
 
 A premium Dynamic Island-style desktop notification pill for [Claude Code](https://claude.ai/code). Built with WPF for hardware-accelerated rendering, featuring the official Claude brand icon with correct SVG rendering and Windows 11 native rounded corners.
 
-![ClaudeIsland notification pill](assets/screenshot.png)
+![ClaudeCodeNotifyBeacon](assets/screenshot.png)
 
 ## Features
 
@@ -14,11 +14,11 @@ A premium Dynamic Island-style desktop notification pill for [Claude Code](https
 - **Dynamic task context** — reads hook stdin JSON to show real task summaries in the pill body
 - **Debounce** — 90s lock file prevents duplicate notifications
 
-## Why ClaudeIsland?
+## Why ClaudeCodeNotifyBeacon?
 
-Most Claude Code notification projects for Windows use `[Windows.UI.Notifications]` toast messages — the standard system popup in the bottom-right corner. ClaudeIsland takes a different approach:
+Most Claude Code notification projects for Windows use `[Windows.UI.Notifications]` toast messages — the standard system popup in the bottom-right corner. ClaudeCodeNotifyBeacon takes a different approach:
 
-| Feature | ClaudeIsland | Toast-based notifiers |
+| Feature | ClaudeCodeNotifyBeacon | Toast-based notifiers |
 |---|---|---|
 | **Rendering** | Custom WPF floating window | System toast API |
 | **Design** | Dynamic Island pill with brand icon | Standard Windows notification |
@@ -29,7 +29,7 @@ Most Claude Code notification projects for Windows use `[Windows.UI.Notification
 | **GPU accelerated** | Yes (WPF Storyboard) | No |
 | **Architecture** | Daemon + trigger file | Direct PowerShell call |
 
-ClaudeIsland is the only project that renders a custom floating WPF pill with the official Claude brand SVG using correct EvenOdd geometry — because a premium AI tool deserves a premium notification.
+ClaudeCodeNotifyBeacon is the only project that renders a custom floating WPF pill with the official Claude brand SVG using correct EvenOdd geometry — because a premium AI tool deserves a premium notification.
 
 ## Requirements
 
@@ -42,7 +42,7 @@ ClaudeIsland is the only project that renders a custom floating WPF pill with th
 ### 1. Clone or download
 
 ```powershell
-git clone https://github.com/Junyi-Tang/ClaudeIsland.git
+git clone https://github.com/Junyi-Tang/ClaudeCodeNotifyBeacon.git
 # or just download notify.ps1, notify-daemon.ps1, and assets/
 ```
 
@@ -59,7 +59,7 @@ Add to your Claude Code settings (`~/.claude/settings.json` or project `.claude/
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -ExecutionPolicy Bypass -File \"C:\\Users\\YOURNAME\\path\\to\\ClaudeIsland\\notify.ps1\""
+            "command": "powershell -ExecutionPolicy Bypass -File \"C:\\Users\\YOURNAME\\path\\to\\ClaudeCodeNotifyBeacon\\notify.ps1\""
           }
         ]
       }
@@ -74,7 +74,7 @@ Add to your Claude Code settings (`~/.claude/settings.json` or project `.claude/
 ```powershell
 Start-Process powershell -WindowStyle Hidden -ArgumentList @(
     "-NoProfile", "-ExecutionPolicy", "Bypass",
-    "-File", """C:\Users\YOURNAME\path\to\ClaudeIsland\notify-daemon.ps1"""
+    "-File", """C:\Users\YOURNAME\path\to\ClaudeCodeNotifyBeacon\notify-daemon.ps1"""
 )
 ```
 
@@ -104,7 +104,7 @@ The daemon stays running in the background. Start it once per login session.
 ## File Structure
 
 ```
-ClaudeIsland/
+ClaudeCodeNotifyBeacon/
 ├── notify.ps1               # Hook entry point (trigger writer)
 ├── notify-daemon.ps1        # Persistent notification daemon (WPF)
 ├── assets/
