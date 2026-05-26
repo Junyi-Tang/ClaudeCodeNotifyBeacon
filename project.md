@@ -14,8 +14,8 @@ Claude Code hook
 
 | File | Role |
 |---|---|
-| `notify.ps1` | Hook entry point. Checks daemon liveness via PID lock, auto-starts if dead, debounces (90s cooldown), reads stdin for hook JSON, writes trigger file. Polls ready-signal file after starting daemon to prevent startup race. |
-| `notify-daemon.ps1` | Long-running WPF daemon. Uses `DispatcherTimer` (250ms interval) integrated with the WPF message pump to detect trigger files with near-zero latency. Plays `Asterisk` chime on notification. Single-instance via PID lock file. Signals ready via `claude_notify_ready.txt`. |
+| `notify.ps1` | Hook entry point. Checks daemon liveness via PID lock, auto-starts if dead, debounces (90s cooldown), reads stdin for hook JSON, writes trigger via atomic `WriteAllText`. Polls ready-signal file after starting daemon to prevent startup race. |
+| `notify-daemon.ps1` | Long-running WPF daemon. Uses `DispatcherTimer` at 50ms (imperceptible latency, well below the ~100ms human perception threshold). Single-instance via PID lock. Signals ready via `claude_notify_ready.txt`. Plays `Asterisk` chime on notification. |
 | `assets/claudecode-color.svg` | Claude Code wordmark icon rendered in the notification badge. |
 
 ## Trigger protocol
@@ -26,7 +26,7 @@ All files live in `$env:TEMP`:
 |---|---|
 | `claude_notify_trigger.txt` | Message payload. Daemon reads and displays content, then deletes it. |
 | `claude_notify_daemon.lock` | Contains daemon PID. Used for single-instance guard and liveness check. |
-| `claude_notify_ready.txt` | Written by daemon once `WaitForChanged` is primed. `notify.ps1` polls this before writing trigger. |
+| `claude_notify_ready.txt` | Written by daemon once the FSW and dispatcher are primed. `notify.ps1` polls this before writing trigger. |
 | `claude_notify_lock.txt` | Debounce timestamp. `notify.ps1` skips if last trigger was < 90s ago. |
 
 ## Daemon startup
@@ -46,7 +46,9 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 
 ## Changelog
 
-- **2026-05-25:** Replaced `FileSystemWatcher.WaitForChanged` (commit `04b6bd2`) with `DispatcherTimer`-based polling (250ms interval). `WaitForChanged` blocked the STA thread in a way that prevented WPF's dispatcher from properly pumping messages, so `PushFrame` inside `Show-Notification` never rendered the window. `DispatcherTimer` integrates directly with the WPF message pump — the timer ticks on the UI thread, and `PushFrame` in Show-Notification creates a proper nested message loop for animations.
+- **2026-05-25 (v3):** Reduced `DispatcherTimer` interval from 250ms to 50ms. At 50ms the polling latency is well below the ~100ms human perception threshold, making notifications feel instant. Attempted `FileSystemWatcher` event-based approaches (`.add_Changed`, `Register-ObjectEvent`) — both failed due to PowerShell threading/scope limitations (no runspace on thread pool threads; module scope isolation in event actions). Pure `DispatcherTimer` at 50ms is the reliable sweet spot.
+- **2026-05-25 (v2):** Replaced `FileSystemWatcher.WaitForChanged` with `DispatcherTimer`-based polling (250ms interval). `WaitForChanged` blocked the STA thread and prevented WPF's `PushFrame` from rendering the window.
+- **2026-05-25 (v1):** Initial version.
 
 ## Design
 

@@ -62,10 +62,6 @@ $PID | Out-File -FilePath $daemonLock -Force
 $readyFile = "$env:TEMP\claude_notify_ready.txt"
 "$PID" | Out-File -FilePath $readyFile -Force
 
-# Debounce state — prevent duplicate triggers
-$script:lastTriggerTime = [DateTime]::MinValue
-$script:isShowing = $false
-
 function Show-Notification {
     param([string]$Message)
 
@@ -284,30 +280,42 @@ function Show-Notification {
     $window.Close()
 }
 
-# ── DispatcherTimer polling — integrates with WPF message pump, no blocking I/O ──
+# ── DispatcherTimer at 50ms — imperceptible latency, no threading complexity ──
+$script:isShowing = $false
+$script:lastTriggerTime = [DateTime]::MinValue
+
 $pollTimer = New-Object System.Windows.Threading.DispatcherTimer
-$pollTimer.Interval = [TimeSpan]::FromMilliseconds(250)
+$pollTimer.Interval = [TimeSpan]::FromMilliseconds(50)
 
 $pollTimer.Add_Tick({
     if ($script:isShowing) { return }
     if (-not (Test-Path $triggerFile)) { return }
 
     $now = [DateTime]::Now
-    if (($now - $script:lastTriggerTime).TotalMilliseconds -lt 100) { return }
+    if (($now - $script:lastTriggerTime).TotalMilliseconds -lt 200) { return }
     $script:lastTriggerTime = $now
 
-    Start-Sleep -Milliseconds 30
-
+    $msg = "Task completed"
     try {
-        $Message = (Get-Content $triggerFile -Encoding utf8 -Raw).Trim()
-        if (-not $Message) { $Message = "Task completed" }
-    } catch { return }
+        $stream = New-Object System.IO.FileStream($triggerFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+        $raw = $reader.ReadToEnd().Trim()
+        $reader.Close(); $stream.Close()
 
-    Remove-Item $triggerFile -Force -ErrorAction SilentlyContinue
+        if ($raw) { $msg = $raw }
+
+        Remove-Item $triggerFile -Force -ErrorAction SilentlyContinue
+    } catch {
+        return
+    }
 
     $script:isShowing = $true
-    Show-Notification -Message $Message
-    $script:isShowing = $false
+    try {
+        Show-Notification -Message $msg
+    } finally {
+        $script:isShowing = $false
+        $script:lastTriggerTime = [DateTime]::Now
+    }
 })
 
 $pollTimer.Start()

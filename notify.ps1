@@ -51,6 +51,6 @@ if ([string]::IsNullOrEmpty($Message)) {
 }
 if ([string]::IsNullOrEmpty($Message)) { $Message = "Task completed" }
 
-# Write trigger file — daemon picks it up within 250ms
+# Write trigger — atomic write so FileSystemWatcher fires on complete content
 $triggerFile = "$env:TEMP\claude_notify_trigger.txt"
-$Message | Out-File -FilePath $triggerFile -Encoding utf8 -Force
+[System.IO.File]::WriteAllText($triggerFile, $Message, [System.Text.Encoding]::UTF8)
