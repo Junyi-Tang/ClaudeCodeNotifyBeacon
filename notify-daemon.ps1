@@ -49,6 +49,17 @@ $propScaleY  = New-Object System.Windows.PropertyPath("ScaleY")
 
 $lastTrigger = $null
 
+# Single-instance guard — write PID so notify.ps1 can detect us
+$daemonLock = "$env:TEMP\claude_notify_daemon.lock"
+if (Test-Path $daemonLock) {
+    try {
+        $existingPid = [int](Get-Content $daemonLock -Raw).Trim()
+        $existingProc = Get-Process -Id $existingPid -ErrorAction SilentlyContinue
+        if ($existingProc -and $existingProc.ProcessName -eq "powershell") { exit 0 }
+    } catch {}
+}
+$PID | Out-File -FilePath $daemonLock -Force
+
 while ($true) {
     if (Test-Path $triggerFile) {
         $current = (Get-Item $triggerFile).LastWriteTime
@@ -94,7 +105,7 @@ while ($true) {
 
             # Ambient premium shadow
             $shadow = New-Object System.Windows.Media.Effects.DropShadowEffect
-            $shadow.BlurRadius = 30; $shadow.Opacity = 0.4; $shadow.ShadowDepth = 5; $shadow.Direction = 270
+            $shadow.BlurRadius = 35; $shadow.Opacity = 0.28; $shadow.ShadowDepth = 5; $shadow.Direction = 270
             $card.Effect = $shadow
 
             # ── Grid Layout ──
@@ -159,21 +170,15 @@ while ($true) {
             $body.TextWrapping = 'NoWrap'
             $body.TextTrimming = 'CharacterEllipsis'
 
-            # Contextual micro hint - default hidden
-            $hint = New-Object System.Windows.Controls.TextBlock
-            $hint.Text = "Click to dismiss"
-            $hint.Foreground = New-Object System.Windows.Media.SolidColorBrush($hintColor)
-            $hint.FontFamily = "Segoe UI"
-            $hint.FontSize = 10.5
-            $hint.Margin = New-Object System.Windows.Thickness(0, 2, 0, 0)
-            $hint.Visibility = [System.Windows.Visibility]::Collapsed
-
             $textStack.Children.Add($title) | Out-Null
             $textStack.Children.Add($body) | Out-Null
-            $textStack.Children.Add($hint) | Out-Null
             $innerGrid.Children.Add($textStack) | Out-Null
 
-            # ── Right Side Meta (Timestamp) ──
+            # ── Right Side Meta (Timestamp + Hint Overlay) ──
+            $metaGrid = New-Object System.Windows.Controls.Grid
+            $metaGrid.VerticalAlignment = 'Center'
+            [System.Windows.Controls.Grid]::SetColumn($metaGrid, 2)
+
             $statusBadge = New-Object System.Windows.Controls.TextBlock
             $statusBadge.Text = $showTime.ToString("HH:mm")
             $statusBadge.Foreground = New-Object System.Windows.Media.SolidColorBrush($hintColor)
@@ -181,20 +186,32 @@ while ($true) {
             $statusBadge.FontSize = 11
             $statusBadge.VerticalAlignment = 'Center'
             $statusBadge.Margin = New-Object System.Windows.Thickness(4, 0, 2, 0)
-            [System.Windows.Controls.Grid]::SetColumn($statusBadge, 2)
-            $innerGrid.Children.Add($statusBadge) | Out-Null
+            $statusBadge.Opacity = 1.0
+
+            $hint = New-Object System.Windows.Controls.TextBlock
+            $hint.Text = "Click to dismiss"
+            $hint.Foreground = New-Object System.Windows.Media.SolidColorBrush($hintColor)
+            $hint.FontFamily = "Segoe UI"
+            $hint.FontSize = 10.5
+            $hint.VerticalAlignment = 'Center'
+            $hint.Margin = New-Object System.Windows.Thickness(4, 0, 2, 0)
+            $hint.Opacity = 0.0
+
+            $metaGrid.Children.Add($statusBadge) | Out-Null
+            $metaGrid.Children.Add($hint) | Out-Null
+            $innerGrid.Children.Add($metaGrid) | Out-Null
 
             $card.Child = $innerGrid
             $window.Content = $card
 
             # ── Micro Interaction (Hover Effects) ──
             $card.Add_MouseEnter({
-                $hint.Visibility = [System.Windows.Visibility]::Visible
-                $statusBadge.Visibility = [System.Windows.Visibility]::Collapsed
+                $statusBadge.Opacity = 0.0
+                $hint.Opacity = 1.0
             })
             $card.Add_MouseLeave({
-                $hint.Visibility = [System.Windows.Visibility]::Collapsed
-                $statusBadge.Visibility = [System.Windows.Visibility]::Visible
+                $hint.Opacity = 0.0
+                $statusBadge.Opacity = 1.0
             })
 
             # ── Entrance Animation ──
