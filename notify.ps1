@@ -42,14 +42,25 @@ if ([string]::IsNullOrEmpty($Message)) {
     try {
         if ([Console]::In.Peek() -ne -1) {
             $stdinLines = @()
-            while ([Console]::In.Peek() -ne -1 -and ($null -ne ($line = [Console]::In.ReadLine()))) { $stdinLines += $line }
+            while ([Console]::In.Peek() -ne -1) {
+                $line = [Console]::In.ReadLine()
+                if ($null -eq $line) { break }
+                $stdinLines += $line
+            }
             $stdin = $stdinLines -join "`n"
             if ($stdin) {
                 $json = $stdin | ConvertFrom-Json -ErrorAction SilentlyContinue
-                if ($json -and $json.user_prompt) {
-                    $prompt = $json.user_prompt
-                    if ($prompt.Length -gt 40) { $prompt = $prompt.Substring(0, 37) + "..." }
-                    $Message = "Finished: `"$prompt`""
+                if ($json) {
+                    $hasBackgroundTasks = $json.background_tasks -and $json.background_tasks.Count -gt 0
+                    $hasLastMessage = $json.last_assistant_message -and $json.last_assistant_message.Length -gt 0
+                    $stopHookActive = $json.stop_hook_active -eq $true
+                    if (-not $hasBackgroundTasks -and $hasLastMessage -and -not $stopHookActive) {
+                        $prompt = if ($json.user_prompt) { $json.user_prompt } else { "Task" }
+                        if ($prompt.Length -gt 40) { $prompt = $prompt.Substring(0, 37) + "..." }
+                        $Message = "Finished: `"$prompt`""
+                    } else {
+                        exit 0
+                    }
                 }
             }
         }
