@@ -1,5 +1,12 @@
 param([string]$Message = "")
 
+# ── Diagnostic log (remove after verification) ──
+$logFile = "$env:TEMP\claude_notify_hook_log.txt"
+$ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+$stdinDump = ""
+try { if ([Console]::In.Peek() -ne -1) { $stdinDump = [Console]::In.ReadToEnd().Substring(0, 200) } } catch {}
+"$ts | CALLED | Msg='$Message' | PID=$PID | stdin=$stdinDump" | Out-File $logFile -Append -Encoding UTF8
+
 # ── Hook entry point: ensure daemon alive, debounce, play sound, write trigger, exit fast ──
 
 # Auto-start daemon if not running
