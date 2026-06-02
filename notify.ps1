@@ -1,13 +1,15 @@
 param([string]$Message = "")
 
+# ── Capture stdin once — used by both diagnostic log and main parsing ──
+$stdinRaw = ""
+try { if ([Console]::In.Peek() -ne -1) { $stdinRaw = [Console]::In.ReadToEnd() } } catch {}
+
 # ── Diagnostic log (remove after verification) ──
 $logFile = "$env:TEMP\claude_notify_hook_log.txt"
 $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
-$stdinDump = ""
-try { if ([Console]::In.Peek() -ne -1) { $stdinDump = [Console]::In.ReadToEnd().Substring(0, 200) } } catch {}
-"$ts | CALLED | Msg='$Message' | PID=$PID | stdin=$stdinDump" | Out-File $logFile -Append -Encoding UTF8
+"$ts | CALLED | Msg='$Message' | PID=$PID | stdin=$($stdinRaw.Substring(0, [Math]::Min(200, $stdinRaw.Length)))" | Out-File $logFile -Append -Encoding UTF8
 
-# ── Hook entry point: ensure daemon alive, debounce, play sound, write trigger, exit fast ──
+# ── Hook entry point: ensure daemon alive, debounce, write trigger, exit fast ──
 
 # Auto-start daemon if not running
 $daemonAlive = $false
@@ -20,15 +22,22 @@ if (Test-Path $daemonLock) {
         if ($lockContent -ne "starting") {
             $daemonPid = [int]$lockContent
             $proc = Get-Process -Id $daemonPid -ErrorAction SilentlyContinue
-            if ($proc) { $daemonAlive = $true }
+            if ($proc -and $proc.ProcessName -eq "powershell") {
+                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId=$daemonPid" -ErrorAction SilentlyContinue).CommandLine
+                if ($cmdLine -like "*notify-daemon.ps1*") { $daemonAlive = $true }
+            }
         } else {
             # Another notify.ps1 is starting the daemon right now — wait for it
             Start-Sleep -Seconds 3
             try {
                 $lockContent2 = (Get-Content $daemonLock -Raw).Trim()
                 if ($lockContent2 -ne "starting") {
-                    $proc = Get-Process -Id ([int]$lockContent2) -ErrorAction SilentlyContinue
-                    if ($proc) { $daemonAlive = $true }
+                    $daemonPid2 = [int]$lockContent2
+                    $proc2 = Get-Process -Id $daemonPid2 -ErrorAction SilentlyContinue
+                    if ($proc2 -and $proc2.ProcessName -eq "powershell") {
+                        $cmdLine2 = (Get-CimInstance Win32_Process -Filter "ProcessId=$daemonPid2" -ErrorAction SilentlyContinue).CommandLine
+                        if ($cmdLine2 -like "*notify-daemon.ps1*") { $daemonAlive = $true }
+                    }
                 }
             } catch {}
         }
@@ -71,43 +80,21 @@ if (Test-Path $lockFile) {
 }
 [System.IO.File]::WriteAllText($lockFile, $now.ToString("o"), [System.Text.Encoding]::UTF8)
 
-# Hook stdin parsing (non-blocking)
+# Hook stdin parsing (uses $stdinRaw captured above — stdin is not re-read)
 if ([string]::IsNullOrEmpty($Message)) {
     try {
-        if ([Console]::In.Peek() -ne -1) {
-            $stdinLines = @()
-            while ([Console]::In.Peek() -ne -1) {
-                $line = [Console]::In.ReadLine()
-                if ($null -eq $line) { break }
-                $stdinLines += $line
-            }
-            $stdin = $stdinLines -join "`n"
-            if ($stdin) {
-                $json = $stdin | ConvertFrom-Json -ErrorAction SilentlyContinue
-                if ($json) {
-                    # Check multiple conditions to ensure we're truly done:
-                    $hasBackgroundTasks = $json.background_tasks -and $json.background_tasks.Count -gt 0
-                    $hasLastMessage = $json.last_assistant_message -and $json.last_assistant_message.Length -gt 0
-                    $stopHookActive = $json.stop_hook_active -eq $true
-
-                    # Only notify if: no background work, has message, and stop hook is NOT active
-                    if (-not $hasBackgroundTasks -and $hasLastMessage -and -not $stopHookActive) {
-                        $prompt = if ($json.user_prompt) { $json.user_prompt } else { "Task" }
-                        if ($prompt.Length -gt 40) { $prompt = $prompt.Substring(0, 37) + "..." }
-                        $Message = "Finished: `"$prompt`""
-                    } else {
-                        # Still working - don't notify
-                        exit 0
-                    }
-                }
+        if ($stdinRaw) {
+            $json = $stdinRaw | ConvertFrom-Json -ErrorAction SilentlyContinue
+            if ($json -and $json.user_prompt) {
+                $prompt = $json.user_prompt
+                if ($prompt.Length -gt 40) { $prompt = $prompt.Substring(0, 37) + "..." }
+                $Message = "Finished: `"$prompt`""
             }
         }
-    } catch {
-        # Silently fail
-    }
+    } catch {}
 }
 if ([string]::IsNullOrEmpty($Message)) { $Message = "Task completed" }
 
-# Write trigger — atomic write so FileSystemWatcher fires on complete content
+# Write trigger — atomic write so daemon detects complete content
 $triggerFile = "$env:TEMP\claude_notify_trigger.txt"
 [System.IO.File]::WriteAllText($triggerFile, $Message, [System.Text.Encoding]::UTF8)

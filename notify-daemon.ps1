@@ -47,30 +47,17 @@ $propOpacity = New-Object System.Windows.PropertyPath("Opacity")
 $propScaleX  = New-Object System.Windows.PropertyPath("ScaleX")
 $propScaleY  = New-Object System.Windows.PropertyPath("ScaleY")
 
-# Single-instance guard — wait briefly then check for other daemons
+# Single-instance guard — check first, then write PID (prevents mutual-exit race)
 $daemonLock = "$env:TEMP\claude_notify_daemon.lock"
-$myPid = $PID
-
-# Write our PID immediately
-$myPid | Out-File -FilePath $daemonLock -Force
-
-# Wait for any concurrent daemon to register
-Start-Sleep -Milliseconds 1000
-
-# Check if another daemon took over
-$alreadyRunning = $false
-try {
-    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction Stop | ForEach-Object {
-        if ($_.CommandLine -like "*notify-daemon.ps1*" -and $_.ProcessId -ne $myPid) {
-            $alreadyRunning = $true
+if (Test-Path $daemonLock) {
+    try {
+        $existingPid = [int](Get-Content $daemonLock -Raw).Trim()
+        $existingProc = Get-Process -Id $existingPid -ErrorAction SilentlyContinue
+        if ($existingProc -and $existingProc.ProcessName -eq "powershell") {
+            $existingCmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$existingPid" -ErrorAction SilentlyContinue).CommandLine
+            if ($existingCmd -like "*notify-daemon.ps1*") { exit 0 }
         }
-    }
-} catch {}
-
-if ($alreadyRunning) {
-    # Another daemon exists — exit quietly
-    Remove-Item $daemonLock -Force -ErrorAction SilentlyContinue
-    exit 0
+    } catch {}
 }
 
 # Signal that daemon is ready to receive events
