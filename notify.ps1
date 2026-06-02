@@ -1,6 +1,6 @@
 param([string]$Message = "")
 
-# ── Hook entry point: ensure daemon alive, debounce, play sound, write trigger, exit fast ──
+# ── Hook entry point: ensure daemon alive, debounce, write trigger, exit fast ──
 
 # Auto-start daemon if not running
 $daemonLock = "$env:TEMP\claude_notify_daemon.lock"
