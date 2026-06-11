@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 $root        = $PSScriptRoot
 $notify      = Join-Path $root 'notify.ps1'
 $legacyAppId = 'ClaudeCode.NotifyBeacon'   # unused now; cleaned up on uninstall (older versions registered it)
-$ourCmd      = "powershell -WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass -File `"$notify`""
+$ourCmd      = "powershell -NoProfile -WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass -File `"$notify`""
 
 if ($SettingsFile) { $settingsPath = $SettingsFile }
 else { $settingsPath = Join-Path $env:USERPROFILE '.claude\settings.json' }
@@ -101,6 +101,6 @@ Write-Host ""
 Write-Host "Done. Restart any open Claude Code session so it reloads settings.json." -ForegroundColor Green
 
 if (-not $NoTest) {
-    & powershell -STA -ExecutionPolicy Bypass -File $notify -Test
+    & powershell -STA -NoProfile -ExecutionPolicy Bypass -File $notify -Test
     Write-Host "Fired a test toast - check the bottom-right of your screen."
 }

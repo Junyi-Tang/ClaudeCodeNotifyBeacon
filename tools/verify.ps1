@@ -22,7 +22,8 @@ if ("$($notifier.Setting)" -ne 'Enabled') {
 
 function Test-Case([string]$Name, [string]$Json, [string]$Nonce) {
     Set-Content -Path $tmp -Value $Json -Encoding ascii
-    cmd /c "powershell -STA -NoProfile -ExecutionPolicy Bypass -File `"$notify`" < `"$tmp`"" | Out-Null
+    # Use the SAME flags install.ps1 registers, so this exercises the real installed hook command.
+    cmd /c "powershell -NoProfile -WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass -File `"$notify`" < `"$tmp`"" | Out-Null
     Start-Sleep -Milliseconds 800
     $hist = [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($AppId)
     $hit = $false
