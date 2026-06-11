@@ -50,12 +50,12 @@ Add to `~/.claude/settings.json` (adjust the path):
   "hooks": {
     "Notification": [
       { "matcher": "", "hooks": [
-        { "type": "command", "command": "powershell -WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass -File \"C:\\path\\to\\ClaudeCodeNotifyBeacon\\notify.ps1\"" }
+        { "type": "command", "command": "powershell -NoProfile -WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass -File \"C:\\path\\to\\ClaudeCodeNotifyBeacon\\notify.ps1\"" }
       ] }
     ],
     "Stop": [
       { "hooks": [
-        { "type": "command", "command": "powershell -WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass -File \"C:\\path\\to\\ClaudeCodeNotifyBeacon\\notify.ps1\"" }
+        { "type": "command", "command": "powershell -NoProfile -WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass -File \"C:\\path\\to\\ClaudeCodeNotifyBeacon\\notify.ps1\"" }
       ] }
     ]
   }
@@ -85,7 +85,7 @@ The script always exits 0 and never writes to stdout, so it can't interfere with
 ### Verify it's working
 
 ```powershell
-powershell -STA -File tools\verify.ps1
+powershell -STA -NoProfile -File tools\verify.ps1
 ```
 
 This fires both hook types through the real pipeline and reads Windows' Action Center back to
@@ -97,7 +97,7 @@ confirm each toast was actually delivered. Exit code 0 means it works, no eyebal
   (Settings → System → Notifications). Errors, if any, are logged to `%TEMP%\claude-notify-error.log`.
 - **Brief console flash** — the hook launches `powershell -WindowStyle Hidden`, which minimizes but
   may not fully eliminate a flash depending on your terminal.
-- **Icon looks wrong** — regenerate it with `powershell -STA -File tools\render-icon.ps1`.
+- **Icon looks wrong** — regenerate it with `powershell -STA -NoProfile -File tools\render-icon.ps1`.
 - **Toast says "Windows PowerShell" at the top** — that's intentional. Windows only displays toasts
   for an app identity it recognizes, and the built-in PowerShell identity is the one guaranteed to be
   present — so the beacon uses it. The Claude logo and "Claude Code" title inside the toast are the
