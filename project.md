@@ -1,62 +1,58 @@
-# Claude Code Notification Beacon
-
-WPF desktop notification daemon for Claude Code task completion events. Shows a Fluent Dark pill notification at bottom-right when a Claude Code task finishes.
+# Project notes
 
 ## Architecture
 
 ```
-Claude Code hook
-  → notify.ps1          # Entry point: auto-starts daemon, writes trigger
-    → notify-daemon.ps1 # Persistent daemon: watches trigger file, shows WPF notification
+Claude Code hook ──(event JSON on stdin)──> notify.ps1 ──> Windows.UI.Notifications toast
 ```
 
-## Files
+That's it. No daemon, no IPC, no lock files, no background process. The toast is rendered by
+the OS notification system, so there is nothing of ours to keep alive or crash.
 
-| File | Role |
-|---|---|
-| `install.ps1` | One-command installer. Merges `Stop` + `Notification` hooks into `~/.claude/settings.json` (backs up first, idempotent — skips entries already pointing at this `notify.ps1`), then starts the daemon. Run once after cloning. |
-| `notify.ps1` | Hook entry point. Checks daemon liveness via PID lock (verifies CommandLine contains `notify-daemon.ps1` to prevent PID-collision false positives), auto-starts if dead, debounces (90s cooldown), reads stdin for hook JSON, writes trigger via atomic `WriteAllText`. Polls ready-signal file after starting daemon to prevent startup race. |
-| `notify-daemon.ps1` | Long-running WPF daemon. Uses `DispatcherTimer` at 50ms (imperceptible latency, well below the ~100ms human perception threshold). Single-instance via PID lock (same CommandLine guard). Signals ready via `claude_notify_ready.txt`. Plays `Asterisk` chime on notification. |
-| `assets/claudecode-color.svg` | Claude Code wordmark icon rendered in the notification badge. |
+- **`notify.ps1`** — reads the hook event, builds a message, debounces duplicates, fires a
+  `ToastGeneric` toast under Windows' built-in PowerShell app identity. Always exits 0; never writes stdout.
+- **`install.ps1`** — backs up `settings.json`, wires the `Notification` + `Stop` hooks
+  idempotently (preserving everything else, written without a BOM). `-Uninstall` reverses it;
+  `-SettingsFile` targets a specific settings.json.
+- **`tools/verify.ps1`** — self-test: fires both hook types through the real pipeline and reads
+  Windows' Action Center back to confirm delivery. Exit 0 = working.
+- **`assets/claude-icon.png`** — the toast app logo, rendered from `claudecode-color.svg`
+  by `tools/render-icon.ps1` (WPF, no external dependency).
 
-## Trigger protocol
+## Design decision: toast, not a custom window
 
-All files live in `$env:TEMP`:
+An earlier version rendered a custom WPF "Dynamic Island" pill via a pre-warmed PowerShell
+daemon. It looked nicer but was structurally fragile — PowerShell is a poor host for a
+persistent GUI process (STA threading, runspace scope, window-lifecycle and duplicate-daemon
+bugs). The reliability ceiling was low and the install footprint was heavy.
 
-| File | Purpose |
-|---|---|
-| `claude_notify_trigger.txt` | Message payload. Daemon reads and displays content, then deletes it. |
-| `claude_notify_daemon.lock` | Contains daemon PID. Used for single-instance guard and liveness check. |
-| `claude_notify_ready.txt` | Written by daemon once the DispatcherTimer is primed. `notify.ps1` polls this before writing trigger. Deleted by `notify.ps1` before each daemon launch to prevent stale-file false positives. |
-| `claude_notify_lock.txt` | Debounce timestamp. `notify.ps1` skips if last trigger was < 90s ago. |
+This version trades the custom look for the OS toast API. The result is:
 
-## Daemon startup
+- **Reliable** — it's the same notification path every Windows app uses.
+- **Zero-dependency** — no module to install, no binary to trust, no SmartScreen prompt.
+- **Shareable** — anyone on Win10/11 + Claude Code runs one `install.ps1`.
 
-```powershell
-Start-Process powershell -WindowStyle Hidden -ArgumentList @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-STA",
-    "-File", "path\to\notify-daemon.ps1"
-)
-```
+If a branded custom pill is ever wanted again, the right move is a small compiled C#/.NET tray
+app that owns its own window and message loop, with the hook reduced to a one-line signal —
+not a PowerShell daemon.
 
-`-STA` is required — WPF objects must be created on an STA thread.
+## Design decision: which app identity sends the toast
 
-## Known issues
+Windows only displays a toast for an AppUserModelID it recognizes — one backed by a Start Menu
+shortcut. A custom AUMID registered only in the registry is accepted by `Show()` without error
+but is silently never displayed (this bit us during development: `Setting` reported `Enabled`,
+`Show()` threw nothing, yet no toast appeared). Rather than ship a Start Menu shortcut purely to
+register a branded identity, the beacon sends under the built-in Windows PowerShell AUMID, which
+is always present and recognized. Cost: the small app-name line reads "Windows PowerShell".
+Benefit: it reliably displays everywhere with zero setup. The visible branding (Claude logo +
+"Claude Code" title) lives in the toast body, so it's a good trade. To reclaim the top-line name,
+register a Start Menu shortcut stamped with a custom AUMID (IPropertyStore interop).
 
-- **Double sound (resolved):** Sound plays once in `notify-daemon.ps1` after `$window.Show()`. `notify.ps1` never plays sound.
+## Known limitations
 
-## Changelog
-
-- **2026-05-25 (v3):** Reduced `DispatcherTimer` interval from 250ms to 50ms. At 50ms the polling latency is well below the ~100ms human perception threshold, making notifications feel instant. Attempted `FileSystemWatcher` event-based approaches (`.add_Changed`, `Register-ObjectEvent`) — both failed due to PowerShell threading/scope limitations (no runspace on thread pool threads; module scope isolation in event actions). Pure `DispatcherTimer` at 50ms is the reliable sweet spot.
-- **2026-05-25 (v2):** Replaced `FileSystemWatcher.WaitForChanged` with `DispatcherTimer`-based polling (250ms interval). `WaitForChanged` blocked the STA thread and prevented WPF's `PushFrame` from rendering the window.
-- **2026-05-25 (v1):** Initial version.
-
-## Design
-
-- **Theme:** Fluent Dark — `rgb(20, 20, 22)` card, 1px subliminal white border at 15% opacity, 26px corner radius
-- **Icon:** Claude Code wordmark in warm orange gradient (`#F37658` → `#D93535`)
-- **Typography:** Segoe UI, SemiBold title (14.5px), slate body (12.5px)
-- **Animation:** CubicEase entrance (300ms scale 0.92→1.0 + fade), 8s auto-dismiss
-- **Hover:** Timestamp crossfades to "Click to dismiss" via Opacity swap (no layout shift)
-- **Shadow:** `DropShadowEffect` BlurRadius 35, Opacity 0.28
-- **Window:** 400×92px, bottom-right corner, `WindowChrome` strips Win32 border artifacts
+- Windows only.
+- The toast's top-line app name reads "Windows PowerShell" (see the app-identity note above).
+- A brief console flash is possible when the hook launches PowerShell, depending on the terminal.
+- Stop-hook toasts fire once per turn; tune with `$NotifyOnStop` / `$DebounceSeconds`.
+- Script string literals stay ASCII — Windows PowerShell 5.1 reads the no-BOM `.ps1` files as
+  ANSI, so non-ASCII in a displayed string would mojibake.

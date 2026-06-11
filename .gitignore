@@ -1,0 +1,13 @@
+# Runtime artifacts (written to %TEMP%, but ignore if they ever land here)
+*.log
+*.tick
+
+# Local settings backups created by install.ps1
+*.bak-*
+settings.json.bak-*
+
+# OS / editor junk
+Thumbs.db
+desktop.ini
+.vs/
+*.user
