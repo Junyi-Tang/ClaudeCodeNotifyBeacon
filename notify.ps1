@@ -1,100 +1,122 @@
-param([string]$Message = "")
+<#
+  ClaudeCodeNotifyBeacon - notify.ps1
+  Fires a native Windows toast when Claude Code needs your attention or finishes a turn.
 
-# ── Capture stdin once — used by both diagnostic log and main parsing ──
-$stdinRaw = ""
-try { if ([Console]::In.Peek() -ne -1) { $stdinRaw = [Console]::In.ReadToEnd() } } catch {}
+  - No daemon, no background process, no external modules. Uses the OS toast API directly.
+  - Invoked by Claude Code's Notification / Stop hooks (JSON on stdin), or manually with -Message.
+  - Always exits 0 and never writes to stdout, so it can never interfere with Claude Code.
+#>
+[CmdletBinding()]
+param(
+    [string]$Message,
+    [string]$Title = 'Claude Code',
+    [switch]$Test
+)
 
-# ── Diagnostic log (remove after verification) ──
-$logFile = "$env:TEMP\claude_notify_hook_log.txt"
-$ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
-"$ts | CALLED | Msg='$Message' | PID=$PID | stdin=$($stdinRaw.Substring(0, [Math]::Min(200, $stdinRaw.Length)))" | Out-File $logFile -Append -Encoding UTF8
+# ---- Config -------------------------------------------------------------
+$NotifyOnStop   = $true   # toast when a turn finishes. Set $false for "only when Claude needs input".
+$PlaySound      = $true   # play the default notification sound
+$DebounceSeconds = 5      # suppress an identical toast fired again within this window
+# Built-in Windows PowerShell app identity. Windows only displays toasts for an AppUserModelID it
+# recognizes (one backed by a Start Menu shortcut); a custom AUMID is silently dropped. Using the
+# always-present PowerShell identity makes toasts reliably appear. Branding lives inside the toast
+# (Claude icon + bold "Claude Code" title), so the only cosmetic cost is a small top-line app label.
+$AppId          = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+# -------------------------------------------------------------------------
 
-# ── Hook entry point: ensure daemon alive, debounce, write trigger, exit fast ──
+$ErrorActionPreference = 'Stop'
+$icon = Join-Path $PSScriptRoot 'assets\claude-icon.png'
 
-# Auto-start daemon if not running
-$daemonAlive = $false
-$daemonLock = "$env:TEMP\claude_notify_daemon.lock"
-
-# Fast path: check lock file for a running daemon PID
-if (Test-Path $daemonLock) {
-    try {
-        $lockContent = (Get-Content $daemonLock -Raw).Trim()
-        if ($lockContent -ne "starting") {
-            $daemonPid = [int]$lockContent
-            $proc = Get-Process -Id $daemonPid -ErrorAction SilentlyContinue
-            if ($proc -and $proc.ProcessName -eq "powershell") {
-                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId=$daemonPid" -ErrorAction SilentlyContinue).CommandLine
-                if ($cmdLine -like "*notify-daemon.ps1*") { $daemonAlive = $true }
-            }
-        } else {
-            # Another notify.ps1 is starting the daemon right now — wait for it
-            Start-Sleep -Seconds 3
-            try {
-                $lockContent2 = (Get-Content $daemonLock -Raw).Trim()
-                if ($lockContent2 -ne "starting") {
-                    $daemonPid2 = [int]$lockContent2
-                    $proc2 = Get-Process -Id $daemonPid2 -ErrorAction SilentlyContinue
-                    if ($proc2 -and $proc2.ProcessName -eq "powershell") {
-                        $cmdLine2 = (Get-CimInstance Win32_Process -Filter "ProcessId=$daemonPid2" -ErrorAction SilentlyContinue).CommandLine
-                        if ($cmdLine2 -like "*notify-daemon.ps1*") { $daemonAlive = $true }
-                    }
-                }
-            } catch {}
-        }
-    } catch {}
+function Write-ErrLog([string]$msg) {
+    try { Add-Content -Path (Join-Path $env:TEMP 'claude-notify-error.log') -Value "[$(Get-Date -f s)] $msg" -Encoding utf8 } catch {}
 }
 
-# Slow path: scan processes if lock file didn't confirm
-if (-not $daemonAlive) {
-    try {
-        Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction Stop | ForEach-Object {
-            if ($_.CommandLine -like "*notify-daemon.ps1*") {
-                $daemonAlive = $true
-                $_.ProcessId | Out-File $daemonLock -Force
-            }
-        }
-    } catch {}
+function ConvertTo-XmlText([string]$s) {
+    if ($null -eq $s) { return '' }
+    $s.Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;').Replace('"', '&quot;').Replace("'", '&apos;')
 }
 
-if (-not $daemonAlive) {
-    $daemonPath = Join-Path (Split-Path $MyInvocation.MyCommand.Path -Parent) "notify-daemon.ps1"
-    Remove-Item "$env:TEMP\claude_notify_ready.txt" -Force -ErrorAction SilentlyContinue
-    "starting" | Out-File $daemonLock -Force
-    Start-Process powershell -WindowStyle Hidden -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-STA", "-File", $daemonPath)
-    # Wait for daemon to signal ready (up to 10s)
-    $readyFile = "$env:TEMP\claude_notify_ready.txt"
-    for ($i = 0; $i -lt 40; $i++) {
-        Start-Sleep -Milliseconds 250
-        if (Test-Path $readyFile) { break }
+try {
+    # ---- Gather hook context (JSON on stdin), if any --------------------
+    $raw = ''
+    if (-not $Test -and [Console]::IsInputRedirected) { $raw = [Console]::In.ReadToEnd() }
+
+    $data = $null
+    if ($raw.Trim()) { try { $data = $raw | ConvertFrom-Json } catch { $data = $null } }
+
+    $event = if ($data -and $data.hook_event_name) { [string]$data.hook_event_name } else { '' }
+
+    # Don't re-fire while a Stop hook is already being processed (prevents loops).
+    if ($data -and $data.stop_hook_active) { exit 0 }
+    if ($event -eq 'Stop' -and -not $NotifyOnStop -and -not $Test) { exit 0 }
+
+    # ---- Build the message --------------------------------------------
+    $body = ''
+    if ($Test) {
+        $body = 'Test notification - your beacon is working.'
     }
-}
+    elseif ($Message) {
+        $body = $Message
+    }
+    elseif ($data -and $data.message) {
+        $body = [string]$data.message          # Notification hook supplies this (e.g. needs permission)
+    }
+    elseif ($event -eq 'Stop') {
+        $body = 'Turn complete.'
+    }
+    else {
+        $body = 'Claude needs your attention.'
+    }
 
-# Debounce — skip if last notification was < 15s ago
-$lockFile = "$env:TEMP\claude_notify_lock.txt"
-$now = Get-Date
-if (Test-Path $lockFile) {
-    try {
-        $last = Get-Date (Get-Content $lockFile -Raw).Trim()
-        if (($now - $last).TotalSeconds -lt 15) { exit 0 }
-    } catch {}
-}
-[System.IO.File]::WriteAllText($lockFile, $now.ToString("o"), [System.Text.Encoding]::UTF8)
+    # Project folder as small attribution context
+    $ctx = ''
+    if ($data -and $data.cwd) { try { $ctx = Split-Path -Leaf ([string]$data.cwd) } catch {} }
+    if (-not $ctx -and $Test) { $ctx = Split-Path -Leaf $PSScriptRoot }
 
-# Hook stdin parsing (uses $stdinRaw captured above — stdin is not re-read)
-if ([string]::IsNullOrEmpty($Message)) {
-    try {
-        if ($stdinRaw) {
-            $json = $stdinRaw | ConvertFrom-Json -ErrorAction SilentlyContinue
-            if ($json -and $json.user_prompt) {
-                $prompt = $json.user_prompt
-                if ($prompt.Length -gt 40) { $prompt = $prompt.Substring(0, 37) + "..." }
-                $Message = "Finished: `"$prompt`""
-            }
+    # ---- Debounce identical toasts -------------------------------------
+    if (-not $Test) {
+        $keyBytes = [Text.Encoding]::UTF8.GetBytes("$event|$body")
+        $md5 = [Security.Cryptography.MD5]::Create()
+        $hash = ([BitConverter]::ToString($md5.ComputeHash($keyBytes))).Replace('-', '').Substring(0, 12)
+        $tick = Join-Path $env:TEMP "claude-notify-$hash.tick"
+        if (Test-Path $tick) {
+            $age = (Get-Date) - (Get-Item $tick).LastWriteTime
+            if ($age.TotalSeconds -lt $DebounceSeconds) { exit 0 }
         }
-    } catch {}
-}
-if ([string]::IsNullOrEmpty($Message)) { $Message = "Task completed" }
+        Set-Content -Path $tick -Value '' -Force
+    }
 
-# Write trigger — atomic write so daemon detects complete content
-$triggerFile = "$env:TEMP\claude_notify_trigger.txt"
-[System.IO.File]::WriteAllText($triggerFile, $Message, [System.Text.Encoding]::UTF8)
+    # ---- Fire the toast ------------------------------------------------
+    $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    $null = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
+
+    $imageXml = ''
+    if (Test-Path $icon) { $imageXml = "<image placement=`"appLogoOverride`" hint-crop=`"none`" src=`"$(ConvertTo-XmlText $icon)`"/>" }
+    $ctxXml = ''
+    if ($ctx) { $ctxXml = "<text placement=`"attribution`">$(ConvertTo-XmlText $ctx)</text>" }
+    $audioXml = if ($PlaySound) { '<audio src="ms-winsoundevent:Notification.Default"/>' } else { '<audio silent="true"/>' }
+
+    $xml = @"
+<toast duration="short">
+  <visual>
+    <binding template="ToastGeneric">
+      $imageXml
+      <text>$(ConvertTo-XmlText $Title)</text>
+      <text>$(ConvertTo-XmlText $body)</text>
+      $ctxXml
+    </binding>
+  </visual>
+  $audioXml
+</toast>
+"@
+
+    $doc = [Windows.Data.Xml.Dom.XmlDocument]::new()
+    $doc.LoadXml($xml)
+    $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($AppId).Show($toast)
+}
+catch {
+    Write-ErrLog $_.Exception.Message
+}
+exit 0
