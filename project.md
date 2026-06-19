@@ -48,11 +48,29 @@ Benefit: it reliably displays everywhere with zero setup. The visible branding (
 "Claude Code" title) lives in the toast body, so it's a good trade. To reclaim the top-line name,
 register a Start Menu shortcut stamped with a custom AUMID (IPropertyStore interop).
 
+## Design decision: terminal-only (skip the desktop app)
+
+Hooks live in the global `~/.claude/settings.json`, so the same `Notification` / `Stop` hooks fire no
+matter which surface launched Claude Code — terminal, IDE, or the desktop app. The desktop app already
+shows its own "task done" notifications, so a beacon toast there is a redundant double-ping.
+
+`notify.ps1` resolves this by walking its parent-process chain at fire time (`Test-FromDesktopApp`).
+The desktop app is a GUI shell named `claude.exe` whose path is *not* the CLI engine — the engine
+always runs from a `\claude-code\` folder, and the Store build of the app lives under
+`\WindowsApps\Claude_...`. A terminal session has no such ancestor. If one is found, the hook exits
+silently. It's a denylist (suppress the known-redundant desktop case, fire everywhere else) rather than
+an allowlist of terminals, so an unrecognized terminal still notifies instead of silently going dark.
+`-Test`, `-Message`, and `BEACON_FORCE=1` (set by `verify.ps1`) bypass the gate so explicit and
+diagnostic fires always work.
+
 ## Known limitations
 
 - Windows only.
 - The toast's top-line app name reads "Windows PowerShell" (see the app-identity note above).
 - A brief console flash is possible when the hook launches PowerShell, depending on the terminal.
 - Stop-hook toasts fire once per turn; tune with `$NotifyOnStop` / `$DebounceSeconds`.
+- Desktop-app suppression keys off the app's process path (`\WindowsApps\Claude_...`, or a `claude.exe`
+  ancestor outside `\claude-code\`); a future desktop build installed to a very different path may need
+  the matcher in `Test-FromDesktopApp` updated.
 - Script string literals stay ASCII — Windows PowerShell 5.1 reads the no-BOM `.ps1` files as
   ANSI, so non-ASCII in a displayed string would mojibake.

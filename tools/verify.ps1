@@ -10,6 +10,10 @@ $AppId  = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powersh
 $notify = Join-Path (Split-Path -Parent $PSScriptRoot) 'notify.ps1'
 $tmp    = Join-Path $env:TEMP 'beacon-verify.json'
 
+# verify is a *delivery* test: bypass the terminal-only surface gate so it proves the toast path
+# works no matter which surface you run it from (including from inside the desktop app).
+$env:BEACON_FORCE = '1'
+
 $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
 $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
 

@@ -17,6 +17,10 @@ through the built-in Windows notification API. That's the whole thing.
 If turn-complete toasts feel too chatty, open `notify.ps1` and set `$NotifyOnStop = $false`.
 You'll still be pinged whenever Claude actually needs you.
 
+**Terminal only — by design.** Hooks are global, so they'd otherwise fire for every Claude Code
+surface. If you also use the Claude *desktop app* (which already shows its own notifications), the
+beacon detects that and stays silent there, so you never get doubled-up pings. Nothing to configure.
+
 ## Requirements
 
 - Windows 10 or 11
@@ -102,6 +106,9 @@ confirm each toast was actually delivered. Exit code 0 means it works, no eyebal
   for an app identity it recognizes, and the built-in PowerShell identity is the one guaranteed to be
   present — so the beacon uses it. The Claude logo and "Claude Code" title inside the toast are the
   real branding.
+- **No toast from the desktop app** — also intentional. The desktop app already notifies you, so the
+  beacon fires only for terminal sessions. To confirm the toast path itself still works from any
+  surface, run the verifier (it force-fires): `powershell -STA -NoProfile -File tools\verify.ps1`.
 
 ## License
 
